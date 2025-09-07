@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   sync:
@@ -17,6 +18,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: true
 
       - name: Add upstream
         run: |
@@ -34,3 +36,61 @@ jobs:
       
       - name: Push updated main
         run: git push origin main
+
+      - name: Ensure jq is available
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y jq
+          fi
+
+      - name: Define workflows allowlist
+        id: cfg
+        run: |
+          # Liste aqui SOMENTE os workflows que devem ficar ativos no fork.
+          # Use o nome do arquivo (basename), ex.: "sync-main.yml"
+          echo "allowed=sync-main.yml" >> $GITHUB_OUTPUT
+
+      - name: List all workflows (REST)
+        id: list
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sL -H "Accept: application/vnd.github+json" \
+               -H "Authorization: Bearer $GH_TOKEN" \
+               -H "X-GitHub-Api-Version: 2022-11-28" \
+               "https://api.github.com/repos/${{ github.repository }}/actions/workflows" \
+               > workflows.json
+          jq '.workflows[] | {id: .id, name: .name, path: .path, state: .state}' workflows.json
+
+      - name: Disable any non-allowlisted workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ALLOWED: ${{ steps.cfg.outputs.allowed }}
+        run: |
+          IFS=',' read -ra OK <<< "$ALLOWED"
+          allow_re='^('"$(printf '%s|' "${OK[@]}" | sed 's/|$//')"')$'
+
+          for row in $(jq -c '.workflows[]' workflows.json); do
+            id=$(echo "$row"   | jq -r '.id')
+            path=$(echo "$row" | jq -r '.path')   # ex: .github/workflows/build.yml
+            state=$(echo "$row"| jq -r '.state')  # active / disabled_manually / ...
+            file=$(basename "$path")
+
+            if [[ "$file" =~ $allow_re ]]; then
+              echo "✔ Mantendo ativo: $file"
+              continue
+            fi
+
+            if [[ "$state" == "active" ]]; then
+              echo "⛔ Desabilitando: $file (id=$id)"
+              curl -sL -X PUT \
+                   -H "Accept: application/vnd.github+json" \
+                   -H "Authorization: Bearer $GH_TOKEN" \
+                   -H "X-GitHub-Api-Version: 2022-11-28" \
+                   "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$id/disable" \
+                   -o /dev/null -w "HTTP %{http_code}\n"
+            else
+              echo "• Já desabilitado: $file (state=$state)"
+            fi
+          done
