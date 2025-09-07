@@ -1,0 +1,31 @@
+name: Sync main from upstream
+
+on:
+  schedule:
+    - cron: "0 */12 * * *"   # roda a cada 12 horas
+  workflow_dispatch:          # permite rodar manualmente
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Add upstream
+        run: |
+          git remote add upstream https://github.com/asternic/wuzapi.git
+          git fetch upstream
+
+      - name: Fast-forward merge upstream/main → fork/main
+        run: |
+          git merge --ff-only upstream/main || echo "⚠️ Não foi possível fast-forward (sem problema se não houve mudanças)"
+      
+      - name: Push updated main
+        run: git push origin main
