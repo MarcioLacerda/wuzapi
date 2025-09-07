@@ -44,37 +44,51 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-      - name: Define workflows allowlist
-        id: cfg
-        run: |
-          # Liste aqui SOMENTE os workflows que devem ficar ativos no fork.
-          # Use o nome do arquivo (basename), ex.: "sync-main.yml"
-          echo "allowed=sync-main.yml" >> $GITHUB_OUTPUT
-
       - name: List all workflows (REST)
         id: list
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}   # << use o token automático
         run: |
-          curl -sL -H "Accept: application/vnd.github+json" \
-               -H "Authorization: Bearer $GH_TOKEN" \
-               -H "X-GitHub-Api-Version: 2022-11-28" \
-               "https://api.github.com/repos/${{ github.repository }}/actions/workflows" \
-               > workflows.json
+          set -euo pipefail
+          # Baixa e falha se HTTP status >= 400; grava status e corpo separados
+          status=$(curl -sS -o workflows.json -w "%{http_code}" -f \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows" \
+            || true)
+
+          echo "HTTP status: ${status}"
+          if [[ -z "${status:-}" || "$status" -ge 400 ]]; then
+            echo "Falha ao listar workflows. Conteúdo recebido:"
+            head -c 1000 workflows.json || true
+            exit 1
+          fi
+
+          # Valida JSON antes de seguir
+          jq . >/dev/null < workflows.json
+
+          # Mostra um resumo
           jq '.workflows[] | {id: .id, name: .name, path: .path, state: .state}' workflows.json
 
       - name: Disable any non-allowlisted workflow
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}   # << idem
           ALLOWED: ${{ steps.cfg.outputs.allowed }}
         run: |
-          IFS=',' read -ra OK <<< "$ALLOWED"
-          allow_re='^('"$(printf '%s|' "${OK[@]}" | sed 's/|$//')"')$'
+          set -euo pipefail
 
-          for row in $(jq -c '.workflows[]' workflows.json); do
+          IFS=',' read -ra OK <<< "${ALLOWED:-}"
+          allow_re='^('"$(printf '%s|' "${OK[@]}" | sed 's/|$//')"')$'
+          if [[ "${#OK[@]}" -eq 0 ]]; then
+            echo "ALLOWED vazio — nada será mantido ativo. (Edite o passo Define workflows allowlist)"
+          fi
+
+          # Itera com while para não quebrar em espaços/UTF-8
+          jq -c '.workflows[]' workflows.json | while read -r row; do
             id=$(echo "$row"   | jq -r '.id')
-            path=$(echo "$row" | jq -r '.path')   # ex: .github/workflows/build.yml
-            state=$(echo "$row"| jq -r '.state')  # active / disabled_manually / ...
+            path=$(echo "$row" | jq -r '.path')    # .github/workflows/foo.yml
+            state=$(echo "$row"| jq -r '.state')   # active / disabled_...
             file=$(basename "$path")
 
             if [[ "$file" =~ $allow_re ]]; then
@@ -84,12 +98,16 @@ jobs:
 
             if [[ "$state" == "active" ]]; then
               echo "⛔ Desabilitando: $file (id=$id)"
-              curl -sL -X PUT \
-                   -H "Accept: application/vnd.github+json" \
-                   -H "Authorization: Bearer $GH_TOKEN" \
-                   -H "X-GitHub-Api-Version: 2022-11-28" \
-                   "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$id/disable" \
-                   -o /dev/null -w "HTTP %{http_code}\n"
+              code=$(curl -sS -o /dev/null -w "%{http_code}" -X PUT \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$id/disable")
+              echo "HTTP $code"
+              if [[ "$code" -ge 400 ]]; then
+                echo "Falha ao desabilitar $file"
+                exit 1
+              fi
             else
               echo "• Já desabilitado: $file (state=$state)"
             fi
