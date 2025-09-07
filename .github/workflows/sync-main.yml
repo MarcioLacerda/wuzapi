@@ -44,10 +44,15 @@ jobs:
             sudo apt-get install -y jq
           fi
 
+      - name: Define allowlist workflows
+        id: cfg
+        run: |
+          echo 'ALLOWED=sync-main.yml' >> $GITHUB_OUTPUT   # adicione outros, separados por vírgula
+
       - name: List all workflows (REST)
         id: list
         env:
-          GH_TOKEN: ${{ github.token }}   # << use o token automático
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # Baixa e falha se HTTP status >= 400; grava status e corpo separados
