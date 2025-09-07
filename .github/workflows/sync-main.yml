@@ -54,7 +54,7 @@ jobs:
       - name: List all workflows (REST)
         id: list
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           curl -sL -H "Accept: application/vnd.github+json" \
                -H "Authorization: Bearer $GH_TOKEN" \
@@ -65,7 +65,7 @@ jobs:
 
       - name: Disable any non-allowlisted workflow
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           ALLOWED: ${{ steps.cfg.outputs.allowed }}
         run: |
           IFS=',' read -ra OK <<< "$ALLOWED"
