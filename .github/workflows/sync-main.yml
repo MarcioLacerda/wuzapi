@@ -26,6 +26,11 @@ jobs:
       - name: Fast-forward merge upstream/main → fork/main
         run: |
           git merge --ff-only upstream/main || echo "⚠️ Não foi possível fast-forward (sem problema se não houve mudanças)"
+
+      - name: Sync tags from upstream
+        run: |
+          git fetch --tags upstream
+          git push origin --tags
       
       - name: Push updated main
         run: git push origin main
